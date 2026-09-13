@@ -9,6 +9,7 @@
 #include <vector>
 #include <queue>
 #include <utility>
+#include <cstdint>
 #include "./dynamic_elem.h"
 #include "./message.h"
 

@@ -9,6 +9,11 @@ include_directories( ${OpenCV_INCLUDE_DIRS} )
 find_package(ZLIB REQUIRED)
 find_package(Threads REQUIRED)
 
+find_path(MYSQL_INCLUDE_DIR NAMES mysql.h PATH_SUFFIXES mysql mariadb)
+if(MYSQL_INCLUDE_DIR)
+  include_directories(${MYSQL_INCLUDE_DIR})
+endif()
+
 add_executable(AtariExperiment atari_experiment.cpp  src/environments/proto_prediction_environments.cpp  src/utils.cpp
       src/nn/networks/lstm_bptt.cpp include/json.hpp  src/experiment/Experiment.cpp
         src/experiment/Database.cpp src/experiment/Metric.cpp
@@ -18,6 +23,11 @@ add_executable(AtariExperiment atari_experiment.cpp  src/environments/proto_pred
          src/environments/animal_learning/traceconditioning.cpp
         src/environments/animal_learning/tracepatterning.cpp  src/nn/networks/lstm_incremental_networks.cpp
         src/nn/lstm.cpp  src/nn/lstm.cpp  src/nn/networks/network_factory.cpp)
+
+add_subdirectory(src/src)
+
+# Legacy ALE sources rely on transitive <cstdint> includes removed in newer GCC
+target_compile_options(AtariExperiment PRIVATE -include cstdint)
 
 add_executable(AnimalLearning src/nn/networks/network_factory.cpp src/nn/networks/lstm_bptt.cpp
         include/json.hpp  src/experiment/Experiment.cpp
@@ -33,14 +43,22 @@ add_executable(Count include/json.hpp include/utils.h src/utils.cpp include/expe
         count_configs.cpp)
 
 
-target_link_libraries(AtariExperiment PUBLIC tbb)
-target_link_libraries(AtariExperiment PUBLIC mariadb  ${OpenCV_LIBS}  ZLIB::ZLIB
-        Threads::Threads dl)
+if(WIN32)
+  set(TBB_LIB tbb12)
+  set(DL_LIB "")
+else()
+  set(TBB_LIB tbb)
+  set(DL_LIB dl)
+endif()
 
-target_link_libraries(AnimalLearning PUBLIC tbb)
+target_link_libraries(AtariExperiment PUBLIC ${TBB_LIB})
+target_link_libraries(AtariExperiment PUBLIC mariadb  ${OpenCV_LIBS}  ZLIB::ZLIB
+        Threads::Threads ${DL_LIB})
+
+target_link_libraries(AnimalLearning PUBLIC ${TBB_LIB})
 target_link_libraries(AnimalLearning PUBLIC mariadb)
 
-target_link_libraries(Count PUBLIC tbb)
+target_link_libraries(Count PUBLIC ${TBB_LIB})
 target_link_libraries(Count PUBLIC mariadb)
 
 

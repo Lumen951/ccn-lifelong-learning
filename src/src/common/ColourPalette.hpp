@@ -18,6 +18,7 @@
 
 #include <vector>
 #include <string>
+#include <cstdint>
 
 // Include obscure header file for uint32_t definition
 

@@ -10,6 +10,7 @@
 #include <map>
 #include <random>
 #include <string>
+#include <cstdint>
 #include "../synapse.h"
 #include "../neuron.h"
 #include "../lstm.h"
