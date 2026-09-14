@@ -1,10 +1,6 @@
 import sys
 
-
-def main():
-    print("count_configs: scaffold OK")
-    return 0
-
+from experiment.config import CountConfig
 
 if __name__ == "__main__":
-    sys.exit(main())
+    CountConfig(sys.argv[1:])
