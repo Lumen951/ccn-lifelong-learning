@@ -13,6 +13,8 @@ class DenseLSTM(BaseLSTM):
     # W[gate] is (hidden, input), U[gate] is (hidden, hidden), b[gate] is (hidden,).
 
     def __init__(self, step_size, seed, hidden_size, no_of_input_features, truncation):
+        if truncation < 1 or hidden_size < 1 or no_of_input_features < 1:
+            raise ValueError("Network dimensions and truncation must be positive")
         self.mt = np.random.default_rng(seed)
         self.time_step = 1
         self.step_size = step_size
@@ -27,6 +29,11 @@ class DenseLSTM(BaseLSTM):
         self.i_queue = [np.zeros(hidden_size) for _ in range(truncation)]
         self.c_queue = [np.zeros(hidden_size) for _ in range(truncation)]
         self.h_queue = [np.zeros(hidden_size) for _ in range(truncation)]
+        # Keep the actual predecessor of each transition, including the oldest
+        # transition after the ring wraps. It cannot be recovered from the ring.
+        self.previous_h = [np.zeros(hidden_size) for _ in range(truncation)]
+        self.previous_c = [np.zeros(hidden_size) for _ in range(truncation)]
+        self.history_size = 0
 
         self.prediction_weights = np.zeros(hidden_size)
         self.prediction_weights_grad = np.zeros(hidden_size)
@@ -63,12 +70,14 @@ class DenseLSTM(BaseLSTM):
         t = self.time_step % self.truncation
         t_1 = (self.time_step - 1) % self.truncation
 
+        self.previous_h[t] = self.h_queue[t_1].copy()
+        self.previous_c[t] = self.c_queue[t_1].copy()
         i_temp, f_temp, g_temp, o_temp = self._compute_gates(inputs, self.h_queue[t_1])
         self.f_queue[t] = f_temp
         self.g_queue[t] = g_temp
         self.i_queue[t] = i_temp
         self.o_queue[t] = o_temp
-        self.x_queue[t] = inputs
+        self.x_queue[t] = inputs.copy()
 
         self.c_queue[t] = f_temp * self.c_queue[t_1] + i_temp * g_temp
         self.h_queue[t] = o_temp * np.tanh(self.c_queue[t])
@@ -77,6 +86,7 @@ class DenseLSTM(BaseLSTM):
 
         prediction = float(self.h_queue[t] @ self.prediction_weights)
         self.time_step += 1
+        self.history_size = min(self.history_size + 1, self.truncation)
         return prediction
 
     def get_state(self):
@@ -92,18 +102,16 @@ class DenseLSTM(BaseLSTM):
         self.prediction_weights_grad += self.h_queue[t]
 
         grad_state = [self.prediction_weights.copy(), np.zeros(self.hidden_state_size)]
-        for counter in range(self.truncation):
+        for counter in range(self.history_size):
             t = (self.time_step - counter - 1) % self.truncation
             grad_state = self.backward_with_future_grad(grad_state, t)
 
     def backward_with_future_grad(self, grad_prev_combined, time):
         grad_f, grad_c = grad_prev_combined
         t_1 = time
-        t_2 = (t_1 - 1) % self.truncation
-
-        h_1 = self.h_queue[t_2]
+        h_1 = self.previous_h[t_1]
         c = self.c_queue[t_1]
-        c_1 = self.c_queue[t_2]
+        c_1 = self.previous_c[t_1]
         f_t = self.f_queue[t_1]
         i_t = self.i_queue[t_1]
         g_t = self.g_queue[t_1]
@@ -150,9 +158,12 @@ class DenseLSTM(BaseLSTM):
 
     def reset_state(self):
         for queue in (self.x_queue, self.f_queue, self.g_queue, self.o_queue,
-                      self.i_queue, self.c_queue, self.h_queue):
+                      self.i_queue, self.c_queue, self.h_queue,
+                      self.previous_h, self.previous_c):
             for slot in queue:
                 slot[:] = 0.0
+        self.time_step = 1
+        self.history_size = 0
 
 
 class DenseLSTMRmsProp(DenseLSTM):
