@@ -12,12 +12,18 @@ class Metric:
         self.path = os.path.join(out_dir, table_name + ".csv")
         self.db_columns = keys
         self.data_vector = []
-        if not os.path.exists(self.path):
+        if os.path.exists(self.path):
+            with open(self.path, newline="", encoding="utf-8") as f:
+                if next(csv.reader(f), None) != keys:
+                    raise ValueError(f"Incompatible CSV header: {self.path}")
+        else:
             with open(self.path, "w", newline="", encoding="utf-8") as f:
                 csv.writer(f).writerow(keys)
 
     def record_value(self, values):
-        self.data_vector.append(values)
+        if len(values) != len(self.db_columns):
+            raise ValueError(f"Expected {len(self.db_columns)} values for {self.path}")
+        self.data_vector.append(list(values))
 
     def commit_values(self):
         if self.data_vector:

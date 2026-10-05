@@ -1,3 +1,4 @@
+import math
 import sys
 from collections import deque
 
@@ -9,6 +10,9 @@ from networks.factory import get_network
 
 def main():
     my_experiment = ExperimentJSON(sys.argv[1:])
+    my_experiment.validate_animal_learning()
+    my_experiment.check_output()
+    network = get_network(my_experiment)
 
     error_metric = Metric(my_experiment.database_name, "error_table",
                           ["run", "step", "error"],
@@ -26,7 +30,15 @@ def main():
     ITI = (80, 120)
     env = TracePatterning(ISI, ITI, 5, my_experiment.get_int_param("seed"))
 
-    network = get_network(my_experiment)
+    my_experiment._write_runs_row()
+    try:
+        train(my_experiment, network, env, error_metric, avg_error)
+    finally:
+        error_metric.commit_values()
+        avg_error.commit_values()
+
+
+def train(my_experiment, network, env, error_metric, avg_error):
     K = 100000
     print("Network created")
     running_error = 0.0
@@ -52,6 +64,8 @@ def main():
         real_error = (real_target - pred) * (real_target - pred)
         target = env.get_US() + gamma * pred
         error = target - old_pred
+        if not all(math.isfinite(v) for v in (pred, real_target, real_error, error)):
+            raise FloatingPointError(f"Non-finite prediction or error at step {i}")
 
         network.update_parameters(layer, error)
         old_pred = pred
@@ -87,4 +101,11 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except (ValueError, OSError, FloatingPointError) as exc:
+        print(f"Experiment failed: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except KeyboardInterrupt:
+        print("Experiment interrupted; recorded metrics have been flushed", file=sys.stderr)
+        sys.exit(130)

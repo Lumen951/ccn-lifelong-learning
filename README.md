@@ -20,6 +20,21 @@ Results are written to CSV under `results/<experiment-name>/` (`runs.csv`,
 `error_table.csv`, `predictions.csv`) instead of the MariaDB tables used by the
 C++ version.
 
+Runs under the same experiment name share one parameter header, including all
+algorithm branches. Parameters not used by a branch are left blank. Run IDs
+must be within the configuration's grid range; an existing run ID is rejected
+before training to prevent duplicate records. To repeat an experiment, change
+its `experiment.name`. Existing files with incompatible headers are rejected
+rather than rewritten. Run experiments sequentially when sharing these CSV files.
+
+Configuration files accept UTF-8 with or without a BOM; output CSV uses UTF-8.
+Missing arguments, invalid dimensions and non-finite predictions produce a
+nonzero exit code. On interruption or failure, buffered metrics are flushed;
+the run remains registered and is not resumable. A new experiment name is
+required to restart it. The original entry point's fixed ISI `(24, 36)`, ITI
+`(80, 120)` and gamma `0.90` are retained; an `ISI` grid parameter does not
+change the environment's interval in this port.
+
 Notes:
 - Config -> run parameter mapping reproduces the C++ version exactly (same grid
   expansion order), so `--run N` selects identical hyper-parameters in both.
