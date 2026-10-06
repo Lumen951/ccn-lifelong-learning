@@ -1,4 +1,25 @@
-# Scalabale Real-Time Recurrent Learning Using Columnar-Constructive Networks (JMLR)
+# Scalable Real-Time Recurrent Learning Using Columnar-Constructive Networks (JMLR)
+
+This repository includes an independent Python + NumPy implementation of the
+network core and animal-learning experiments. Training runs entirely in Python;
+it does not compile, wrap or launch the original C++ code. The C++ sources are
+retained for reference and optional numerical comparisons.
+
+The current Python implementation covers:
+
+| Component | Python implementation |
+| --- | --- |
+| LSTM cells and RTRL traces | `nn/lstm.py` |
+| Columnar, constructive, hybrid and SNAP networks | `networks/incremental.py` |
+| TBPTT and RMSProp baseline | `networks/bptt.py` |
+| Trace conditioning and trace patterning environments | `envs/animal_learning.py` |
+| Parameter grids and CSV metrics | `experiment/config.py`, `experiment/metric.py` |
+| Weights, full training snapshots and recovery | `experiment/checkpoint.py` |
+| Animal-learning training entry point | `run_animal_learning.py` |
+
+Atari training, ROM/policy loading and the embedded ALE emulator have not been
+ported. Python currently runs on the CPU; NVIDIA GPU acceleration is not
+implemented. No database service or C++ toolchain is required for Python training.
 
 **Paper:** [link here](https://jmlr.org/papers/volume24/23-0367/23-0367.pdf)
 
@@ -6,8 +27,9 @@
 
 ## Python port
 
-The network code and the animal-learning experiment are ported to Python (package
-managed by [uv](https://docs.astral.sh/uv/)):
+Dependencies and the virtual environment are managed by
+[uv](https://docs.astral.sh/uv/). This is a script project, with no package
+installation or publishing step:
 
 ```bash
 uv sync                                              # create .venv and install numpy
@@ -38,8 +60,8 @@ change the environment's interval in this port.
 Notes:
 - Config -> run parameter mapping reproduces the C++ version exactly (same grid
   expansion order), so `--run N` selects identical hyper-parameters in both.
-- The port is pure Python + numpy and prioritizes faithfulness over speed; a
-  50M-step run takes hours rather than minutes.
+- The port is pure Python + NumPy and prioritizes correctness. The runtime of
+  full 50M-step experiments has not been measured.
 - Dead code in the C++ experiment path (Synapse graph machine, cartpole/tmaze/
   weather/copy_task/mountain_car envs, the embedded Atari emulator) is not ported.
 
