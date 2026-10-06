@@ -139,7 +139,13 @@ class ExperimentJSON:
         parser = argparse.ArgumentParser(description="Run an animal-learning experiment")
         parser.add_argument("--config", required=True)
         parser.add_argument("--run", required=True, type=int)
+        parser.add_argument("--checkpoint-every", type=int, default=50000)
+        parser.add_argument("--resume", help="Path to a checkpoint from this experiment")
         args = parser.parse_args(argv)
+        if args.checkpoint_every <= 0:
+            raise ValueError('checkpoint-every must be positive')
+        self.checkpoint_every = args.checkpoint_every
+        self.resume = args.resume
         run = args.run
         j = load_config(args.config)
         total_combinations = _prod(get_combinations(j))
@@ -201,7 +207,14 @@ class ExperimentJSON:
                     if None in row or any(v is None for v in row.values()):
                         raise ValueError("Existing runs.csv contains malformed rows")
                     if row["run"] == str(self.run):
-                        raise ValueError(f"Run {self.run} already exists; use a new experiment name to rerun")
+                        if self.resume:
+                            expected = {k: str(self.args_for_run.get(k, '')) for k in self.run_columns}
+                            if row != expected:
+                                raise ValueError('Registered run parameters do not match')
+                            return
+                        raise ValueError(f"Run {self.run} already exists; use --resume or a new experiment name")
+        if self.resume:
+            raise ValueError('Cannot resume an unregistered run')
 
     def _write_runs_row(self):
         self.check_output()

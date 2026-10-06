@@ -1,18 +1,25 @@
 import math
 import sys
 from collections import deque
+from pathlib import Path
 
 from envs.animal_learning import TracePatterning
 from experiment.config import ExperimentJSON
 from experiment.metric import Metric
 from networks.factory import get_network
+from experiment.checkpoint import Checkpoints, writer_lock
 
 
 def main():
     my_experiment = ExperimentJSON(sys.argv[1:])
     my_experiment.validate_animal_learning()
+    with writer_lock(Path('results') / my_experiment.database_name):
+        run_experiment(my_experiment)
+
+
+def run_experiment(my_experiment):
     my_experiment.check_output()
-    network = get_network(my_experiment)
+    network = None if my_experiment.resume else get_network(my_experiment)
 
     error_metric = Metric(my_experiment.database_name, "error_table",
                           ["run", "step", "error"],
@@ -28,28 +35,41 @@ def main():
 
     ISI = (24, 36)
     ITI = (80, 120)
-    env = TracePatterning(ISI, ITI, 5, my_experiment.get_int_param("seed"))
+    env = None if my_experiment.resume else TracePatterning(ISI, ITI, 5, my_experiment.get_int_param("seed"))
 
-    my_experiment._write_runs_row()
+    checkpoints = Checkpoints(my_experiment, (error_metric, avg_error))
+    state = checkpoints.restore(my_experiment.resume) if my_experiment.resume else None
+    if state is None:
+        my_experiment._write_runs_row()
     try:
-        train(my_experiment, network, env, error_metric, avg_error)
+        train(my_experiment, network, env, error_metric, avg_error, checkpoints, state)
     finally:
         error_metric.commit_values()
         avg_error.commit_values()
 
 
-def train(my_experiment, network, env, error_metric, avg_error):
-    K = 100000
+def train(my_experiment, network, env, error_metric, avg_error, checkpoints, state=None):
     print("Network created")
-    running_error = 0.0
-    list_of_errors = deque()
-    gamma = 0.90
-    x = env.reset()
-    old_pred = network.forward(x)
-    layer = 0
-    steps = my_experiment.get_int_param("steps")
-    feature_increase = int(my_experiment.get_vector_param("features")[2])
-    for i in range(steps):
+    if state is None:
+        state = {'network': network, 'env': env, 'next_step': 0, 'layer': 0,
+                 'old_pred': network.forward(env.reset()), 'running_error': 0.0,
+                 'errors': deque()}
+        checkpoints.save(state)
+    try:
+        train_steps(my_experiment, checkpoints, state, error_metric, avg_error)
+    except BaseException:
+        checkpoints.status('interrupted_or_failed', state['next_step'])
+        raise
+
+
+def train_steps(my_experiment, checkpoints, state, error_metric, avg_error):
+    network, env = state['network'], state['env']
+    running_error, list_of_errors = state['running_error'], state['errors']
+    old_pred, layer = state['old_pred'], state['layer']
+    steps = my_experiment.get_int_param('steps')
+    feature_increase = int(my_experiment.get_vector_param('features')[2])
+    gamma, K = .90, 100000
+    for i in range(state['next_step'], steps):
         if i % feature_increase == feature_increase - 1:
             layer += 1
             print("Increasing layer")
@@ -95,9 +115,12 @@ def train(my_experiment, network, env, error_metric, avg_error):
             print("Step =", i, "Error =", running_error / K)
             error_metric.commit_values()
             avg_error.commit_values()
+        state.update(next_step=i + 1, old_pred=old_pred, layer=layer,
+                     running_error=running_error)
+        if (i + 1) % my_experiment.checkpoint_every == 0 and i + 1 < steps:
+            checkpoints.save(state)
 
-    error_metric.commit_values()
-    avg_error.commit_values()
+    checkpoints.save(state, status='completed')
 
 
 if __name__ == "__main__":

@@ -30,8 +30,8 @@ rather than rewritten. Run experiments sequentially when sharing these CSV files
 Configuration files accept UTF-8 with or without a BOM; output CSV uses UTF-8.
 Missing arguments, invalid dimensions and non-finite predictions produce a
 nonzero exit code. On interruption or failure, buffered metrics are flushed;
-the run remains registered and is not resumable. A new experiment name is
-required to restart it. The original entry point's fixed ISI `(24, 36)`, ITI
+resume from the most recent valid checkpoint as described below.
+The original entry point's fixed ISI `(24, 36)`, ITI
 `(80, 120)` and gamma `0.90` are retained; an `ISI` grid parameter does not
 change the environment's interval in this port.
 
@@ -64,7 +64,52 @@ Python initializes cell states and RMSProp accumulators explicitly. The C++
 LSTM constructor leaves hidden/cell states uninitialized, and the normalized
 network constructor omits readout RMSProp initialization. Fixed initial states
 and weights are required for a meaningful future comparison with C++.
-Full C++ equivalence and long experiment runs have not yet been validated.
+The deterministic C++ probe checks eight RTRL cell steps and three dense LSTM
+steps (before the original ring bug occurs), including state, gradients and
+RMSProp parameter updates. Maximum absolute differences are approximately
+`5.27e-8` and `2.10e-8`. This is a component comparison, not full experiment
+equivalence; long experiment runs have not yet been validated.
+
+### Checkpoints and experiment records
+
+Every run saves an initial snapshot, a snapshot every 50,000 completed steps,
+and a final snapshot. Set `--checkpoint-every N` to change the interval. All
+snapshots are retained under the existing experiment result directory:
+
+- `checkpoint_<run>_<step>.npz`: weights, optimizer accumulators, gradient
+  traces, normalization statistics, network/environment state, RNG state,
+  completed step count, previous prediction and the rolling error window.
+- `run_<run>.json`: selected parameters, Python/NumPy versions, source SHA-256,
+  status, progress, checkpoint filenames and checksums.
+- `.writer.lock`: an OS lock preventing simultaneous writers to shared CSVs;
+  the OS releases the lock on process exit, even if the lock file remains.
+
+```bash
+uv run python run_animal_learning.py --config experiment_configs/animal_learning_camera_ready.json --run 0 --checkpoint-every 50000
+uv run python run_animal_learning.py --config experiment_configs/animal_learning_camera_ready.json --run 0 --resume results/animal_learning_camera_ready/checkpoint_0_50000.npz
+```
+
+Resume requires identical parameters, training source and Python/NumPy versions.
+NPZ loading uses `allow_pickle=False`; numeric arrays have descriptive keys such
+as `state/network/prediction_weights`. Checkpoint writes use a flushed temporary
+file followed by atomic replacement. CSV prefix hashes bind snapshots to their
+metric history. Resuming an older checkpoint removes only later rows belonging
+to that run, then replays them; it refuses rollback if another run wrote later
+rows, or if earlier data was modified. Interrupted steps are never saved as a
+valid snapshot: restart from the last completed checkpoint. All intermediate
+snapshots are retained, so disk usage increases during long runs.
+
+The verification script tests exact disk recovery for four network types and
+CLI recovery across layer changes and BPTT window wraps, without duplicate CSV
+rows. To additionally run the original C++ comparison (requires a compiler):
+
+```bash
+g++ -std=c++20 -O2 verify_cpp.cpp src/nn/lstm.cpp src/nn/neuron.cpp src/nn/synapse.cpp src/nn/dynamic_elem.cpp src/nn/utils.cpp src/utils.cpp src/nn/networks/lstm_bptt.cpp -o build/verify_cpp.exe
+uv run python verify_gradients.py --cpp build/verify_cpp.exe
+```
+
+The compile command assumes `build/` exists. On Linux, use `build/verify_cpp`
+instead. The C++ probe does not require MariaDB, OpenCV or ROM data.
 
 ## Compilation instructions (C++ original)
 

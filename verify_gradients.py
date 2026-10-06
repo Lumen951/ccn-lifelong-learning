@@ -5,12 +5,22 @@ central finite differences of the replayed hidden state, and that the
 truncated-BPTT gradients in networks/bptt.py match finite differences of
 the replayed windowed prediction sum.
 """
+import argparse
+import contextlib
+import io
+import json
+import subprocess
+import tempfile
+from pathlib import Path
+
 import numpy as np
 
 from nn.neuron import LinearNeuron
 from nn.lstm import LSTM, LSTMNormalied
 from networks.bptt import DenseLSTM, DenseLSTMRmsProp
 from networks.incremental import IncrementalNetworks, NormalizedIncrementalNetworks, Snap1
+from envs.animal_learning import TracePatterning
+from experiment.checkpoint import save_state, load_state
 
 
 def central_diff(f, ref, eps=1e-5):
@@ -323,11 +333,120 @@ def check_cells_and_freezing():
     print("Cell normalization, gradient traces and layer freezing: PASS")
 
 
+def check_checkpoint_roundtrip():
+    with contextlib.redirect_stdout(io.StringIO()):
+        nets = [IncrementalNetworks(.001,0,12,1,4,2,.1,.999),
+                NormalizedIncrementalNetworks(.001,0,12,1,4,2,.1,.999),
+                Snap1(.001,0,12,1,4,2,.1), DenseLSTMRmsProp(.001,0,3,12,2,.999,1e-8)]
+    with tempfile.TemporaryDirectory(prefix='ccn-roundtrip-') as directory:
+        for net in nets:
+            env = TracePatterning((24,36),(80,120),5,0)
+            old = net.forward(env.reset())
+            def step(n, e, previous):
+                x = e.step()
+                n.decay_gradient(.891)
+                n.backward(0)
+                pred = n.forward(x)
+                n.update_parameters(0, e.get_US() + .9 * pred - previous)
+                return pred
+            for _ in range(30):
+                old = step(net, env, old)
+            path = Path(directory) / 'state.npz'
+            save_state(path, {'network': net, 'env': env, 'old_pred': old}, {'test': True})
+            state, metadata = load_state(path)
+            assert metadata == {'test': True}
+            restored, restored_env, restored_old = state['network'], state['env'], state['old_pred']
+            for _ in range(200):
+                old = step(net, env, old)
+                restored_old = step(restored, restored_env, restored_old)
+                assert old == restored_old
+                np.testing.assert_array_equal(net.prediction_weights, restored.prediction_weights)
+                assert env.mt.bit_generator.state == restored_env.mt.bit_generator.state
+            print(type(net).__name__ + ' disk checkpoint replay: exact')
+
+
+def check_cpp(path):
+    output = subprocess.check_output([str(Path(path).resolve())], text=True)
+    actual = {'cell': [], 'dense': []}
+    for line in output.splitlines():
+        fields = line.split()
+        if fields and fields[0] in actual:
+            actual[fields[0]].append(np.array([float(v) for v in fields[1:]]))
+    cell = LSTM(.02,.03,-.01,.04,.01,-.02,.03,.02,.1,.999)
+    inputs = [LinearNeuron(True,False) for _ in range(3)]
+    for j, neuron in enumerate(inputs):
+        cell.add_synapse(neuron,.01*(j+1),-.02*(j+1),.03*(j+1),-.01*(j+1))
+    expected = {'cell': [], 'dense': []}
+    for t in range(8):
+        for j, neuron in enumerate(inputs):
+            neuron.value = (t+j)%2
+        cell.update_value_sync(); cell.fire(); cell.decay_gradient(.891)
+        cell.compute_gradient_of_all_synapses(); cell.accumulate_gradient(.3)
+        cell.update_weights(.001,-.2)
+        arrays = [getattr(cell, prefix+gate) for prefix in ('w_', 'Gw_') for gate in ('i','f','g','o')]
+        scalars = [getattr(cell, prefix+gate) for prefix in ('Gu_', 'Gb_', 'u_', 'b_') for gate in ('i','f','g','o')]
+        expected['cell'].append(np.concatenate(([cell.h,cell.c], *arrays, scalars)))
+    net = DenseLSTMRmsProp(.001,0,2,3,8,.9999,1e-8)
+    for array, modulus in ((net.W,7),(net.U,5),(net.b,3)):
+        array.flat[:] = .01 * (np.arange(array.size)%modulus - modulus//2)
+    net.prediction_weights[:] = [.2,-.1]
+    for t in range(3):
+        prediction = net.forward([t%2,(t+1)%2,t%2]); net.decay_gradient(.891)
+        net.backward(0); net.update_parameters(0,-.2)
+        expected['dense'].append(np.concatenate([[prediction],net.get_state(), net.W.ravel(),net.U.ravel(),
+            net.b.ravel(),net.prediction_weights,net.W_grad.ravel(),net.U_grad.ravel(),net.b_grad.ravel(),net.prediction_weights_grad]))
+    for kind in actual:
+        assert len(actual[kind]) == len(expected[kind]), 'Missing C++ probe output'
+        a, b = np.array(actual[kind]), np.array(expected[kind])
+        np.testing.assert_allclose(a, b, atol=2e-7, rtol=2e-5)
+        print(f'C++ {kind} predictions/state/gradients/updates: PASS, max absolute error {np.max(np.abs(a-b)):.2e}')
+
+
+def check_resume_cli():
+    import sys
+    root = Path(__file__).resolve().parent
+    params = {'seed':['0'], 'steps':['450'], 'normalization_rate':['.999'],
+              'input_features':['12'], 'features':['4:2:200'], 'step_size':['.001'],
+              'start':['0'], 'lambda':['.99'], 'std_cap':['.1']}
+    with tempfile.TemporaryDirectory(prefix='ccn-cli-resume-') as directory:
+        config = Path(directory) / 'config.json'
+        for algorithm in ('hybrid', 'tbptt_rmsprop'):
+            params['algorithm'] = [{algorithm: {} if algorithm == 'hybrid' else
+                {'features_truncation':['3:2'], 'beta_2':['.9999'], 'eps':['1e-8']}}]
+            config.write_text(json.dumps({'experiment':{'name':algorithm, 'params':params}}), encoding='utf-8')
+            command = [sys.executable, '-B', str(root/'run_animal_learning.py'),
+                       '--config', str(config), '--run', '0', '--checkpoint-every', '100']
+            def execute(extra=()):
+                result = subprocess.run(command + list(extra), cwd=directory,
+                                        capture_output=True, text=True, timeout=60)
+                assert result.returncode == 0, result.stderr
+            execute()
+            out = Path(directory) / 'results' / algorithm
+            paths = [out / name for name in ('runs.csv','error_table.csv','predictions.csv')]
+            original = [path.read_bytes() for path in paths]
+            state, _ = load_state(out/'checkpoint_0_450.npz')
+            execute(('--resume',str(out/'checkpoint_0_100.npz')))
+            assert original == [path.read_bytes() for path in paths]
+            restored, _ = load_state(out/'checkpoint_0_450.npz')
+            assert state['old_pred'] == restored['old_pred']
+            assert state['running_error'] == restored['running_error']
+            np.testing.assert_array_equal(state['network'].prediction_weights,
+                                          restored['network'].prediction_weights)
+            print(algorithm + ' CLI resume across transitions: exact CSV and weights')
+
+
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--cpp', help='Path to the compiled verify_cpp probe')
+    args = parser.parse_args()
     check_lstm()
     check_lstm(normalized=True)
     for T, trunc in ((3, 8), (5, 5), (7, 5), (16, 3), (6, 1)):
         check_bptt(T, trunc)
     check_updates()
     check_cells_and_freezing()
+    check_checkpoint_roundtrip()
+    check_resume_cli()
+    if args.cpp:
+        check_cpp(args.cpp)
     print("All gradient checks passed.")
