@@ -1,0 +1,43 @@
+{
+  "defaults": {
+    "steps": 20000,
+    "seed": 0,
+    "hidden": 16,
+    "layers": 1,
+    "heads": 2,
+    "context": 48,
+    "memory": 48,
+    "lr": 0.001,
+    "gamma": 0.9,
+    "lambda": 0.99,
+    "clip": 10.0,
+    "isi": [24, 36],
+    "iti": [80, 120],
+    "log_every": 1000,
+    "window": 10000,
+    "checkpoint_every": 10000,
+    "features_per_stage": 4,
+    "steps_per_stage": 5000,
+    "normalization_rate": 0.99999,
+    "std_cap": 0.1,
+    "diagnostic_every": 100
+  },
+  "presets": {
+    "rnn": {"model": "rnn"},
+    "gru": {"model": "gru"},
+    "lstm": {"model": "lstm"},
+    "transformer": {"model": "transformer"},
+    "gtrxl": {"model": "gtrxl"},
+    "columnar": {"model": "ccn", "hidden": 16, "features_per_stage": 16},
+    "ccn": {"model": "ccn"},
+    "ccn_current": {
+      "model": "ccn", "hidden": 7, "features_per_stage": 7,
+      "steps_per_stage": 50000000, "normalization_rate": 1.0, "lr": 0.3
+    },
+    "ccn_paper": {
+      "model": "ccn", "steps": 10000000, "window": 100000,
+      "steps_per_stage": 2500000, "lr": 0.0001, "log_every": 50000,
+      "checkpoint_every": 500000
+    }
+  }
+}
