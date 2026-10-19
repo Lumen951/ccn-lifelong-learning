@@ -1,4 +1,16 @@
-# Scalable Real-Time Recurrent Learning Using Columnar-Constructive Networks (JMLR)
+# CCN Lifelong Learning
+
+Research on columnar-constructive networks for online prediction, column-level
+functional analysis, and continual learning. The research roadmap is being
+organized; planned experiments are not claims of implemented or validated results.
+
+Start with the [documentation map](docs/README.md), the
+[project working rules](AGENTS.md), and the
+[current progress](docs/changelog/README.md).
+The [sequence-model experiment guide](experiments/README.md) describes the
+existing comparison suite, including its separate PyTorch baselines.
+
+## Scalable Real-Time Recurrent Learning Using Columnar-Constructive Networks (JMLR)
 
 This repository includes an independent Python + NumPy implementation of the
 network core and animal-learning experiments. Training runs entirely in Python;
